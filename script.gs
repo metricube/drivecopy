@@ -44,7 +44,7 @@ function startCopy(sourceid) {
   userProperties.setProperty('COPY_FILES_CONTINUATION_TOKEN', continuationToken);
   userProperties.setProperty('COPY_FILES_BASE_TARGET_FOLDER_ID', target.getId());
   
- // Set the trigger to start after 10 seconds - will allow the webapp portion to complete
+ // Set the trigger to start after 20 seconds - will allow the webapp portion to complete
  ScriptApp.newTrigger("resume")
    .timeBased()
    .after(20000)
@@ -132,6 +132,11 @@ function resume(e) {
   // Clean up - we're done
   userProperties.deleteAllProperties();
   removeTriggers();
+  
+  // Send confirmation mail
+  var email = Session.getActiveUser().getEmail();
+  MailApp.sendEmail(email, "Copy complete",
+                   "The Google Drive folder copy has completed.");    
   
 };
 
