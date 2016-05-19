@@ -1,3 +1,4 @@
+// https://github.com/metricube/drivecopy/blob/master/script.gs
 
 // This code copies a directory tree.  It maintains
 // its progress only in the top level tree - so if there
@@ -24,9 +25,27 @@
    return app;
  }
 
+function reset() {
+  var userProperties = PropertiesService.getUserProperties();
+  userProperties.deleteAllProperties();
+  removeTriggers();
+  Logger.clear();
+}
+
+function initializeManually() {
+  reset();
+  // set this to the source id and then run
+  startCopy('xyzzy');
+}
 
 function startCopy(sourceid) {
-  source = DriveApp.getFolderById(sourceid)
+  source = DriveApp.getFolderById(sourceid);
+  
+  var userProperties = PropertiesService.getUserProperties();
+  
+  // clear prior state
+  userProperties.deleteAllProperties();
+  removeTriggers();
   
   // Create the target folder
   root = DriveApp.getRootFolder();
@@ -40,7 +59,6 @@ function startCopy(sourceid) {
   var subfolders = source.getFolders()
   var continuationToken = subfolders.getContinuationToken();
   
-  var userProperties = PropertiesService.getUserProperties();
   userProperties.setProperty('COPY_FILES_CONTINUATION_TOKEN', continuationToken);
   userProperties.setProperty('COPY_FILES_BASE_TARGET_FOLDER_ID', target.getId());
   
@@ -89,6 +107,7 @@ function resume(e) {
   
   var userProperties = PropertiesService.getUserProperties();
   var continuationToken = userProperties.getProperty('COPY_FILES_CONTINUATION_TOKEN');
+  var continuationId = userProperties.getProperty('COPY_FILES_CONTINUATION_ID');
   var lastTargetFolderCreatedId = userProperties.getProperty('COPY_FILES_LAST_TARGET_FOLDER_ID');
   var baseTargetFolderId = userProperties.getProperty('COPY_FILES_BASE_TARGET_FOLDER_ID');
   var dir;
@@ -97,6 +116,7 @@ function resume(e) {
   // Remove any partially copied directories
   if(lastTargetFolderCreatedId != null) {     
     var partialdir = DriveApp.getFolderById(lastTargetFolderCreatedId);
+    Logger.log("Trashing partial folder " + lastTargetFolderCreatedId);
     partialdir.setTrashed(true);
   }
   
@@ -116,10 +136,23 @@ function resume(e) {
 
   var subfolders = DriveApp.continueFolderIterator(continuationToken);
   var dfolder = DriveApp.getFolderById(baseTargetFolderId);
+  
+  // fast forward subfolders iterator until it catches up with where it last was
+  while (continuationId != null && subfolders.hasNext()) {
+    dir = subfolders.next();
+    if (dir.getId() == continuationId) {
+      // we've caught up to the last fully processed folder, continue normally
+      Logger.log('Caught up to continuation point');
+      break;
+    } else {
+      Logger.log('Skipping forwards past ' + dir.getName());
+    }
+  }
 
-  while(subfolders.hasNext()) {    
+  while(subfolders.hasNext()) {
+    // capture the continuation state from just before the folder we process
+    // instead of after ... so that we can be safe against the iterator bug we work around getting fixed
     var continuationToken = subfolders.getContinuationToken();
-    userProperties.setProperty('COPY_FILES_CONTINUATION_TOKEN', continuationToken);    
 
     dir = subfolders.next();
     newdir = dfolder.createFolder(dir.getName());
@@ -127,7 +160,24 @@ function resume(e) {
     
     userProperties.setProperty('COPY_FILES_LAST_TARGET_FOLDER_ID', newdir.getId());
     copyFolder(dir, newdir);
+    
+    // finished a folder, save state and restart in 1 minute on next folder
+    removeTriggers();
+    ScriptApp.newTrigger("resume")
+      .timeBased()
+      .after(60 * 1000)
+      .create();
+    // don't update the continuation token here, in case it starts working properly,
+    // then our bug workaround would break things
+    var continuationId = dir.getId();
+    userProperties.deleteProperty('COPY_FILES_LAST_TARGET_FOLDER_ID');
+    userProperties.setProperty('COPY_FILES_CONTINUATION_TOKEN', continuationToken);
+    userProperties.setProperty('COPY_FILES_CONTINUATION_ID', continuationId);
+    Logger.log('All set for continuation run');
+    return;
   }
+  
+  Logger.log('Done with everything, cleaning up and sending mail');
   
   // Clean up - we're done
   userProperties.deleteAllProperties();
